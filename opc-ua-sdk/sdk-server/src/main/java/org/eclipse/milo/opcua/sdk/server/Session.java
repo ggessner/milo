@@ -49,9 +49,16 @@ import org.eclipse.milo.opcua.stack.core.types.structured.UserIdentityToken;
 import org.eclipse.milo.opcua.stack.core.types.structured.UserNameIdentityToken;
 import org.eclipse.milo.opcua.stack.core.types.structured.X509IdentityToken;
 import org.eclipse.milo.opcua.stack.core.util.CertificateUtil;
+import org.eclipse.milo.opcua.stack.server.services.AttributeHistoryServiceSet;
+import org.eclipse.milo.opcua.stack.server.services.AttributeServiceSet;
+import org.eclipse.milo.opcua.stack.server.services.MethodServiceSet;
+import org.eclipse.milo.opcua.stack.server.services.MonitoredItemServiceSet;
 import org.eclipse.milo.opcua.stack.server.services.NodeManagementServiceSet;
+import org.eclipse.milo.opcua.stack.server.services.QueryServiceSet;
 import org.eclipse.milo.opcua.stack.server.services.ServiceRequest;
 import org.eclipse.milo.opcua.stack.server.services.SessionServiceSet;
+import org.eclipse.milo.opcua.stack.server.services.SubscriptionServiceSet;
+import org.eclipse.milo.opcua.stack.server.services.ViewServiceSet;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -80,14 +87,14 @@ public class Session implements SessionServiceSet {
     private volatile long lastActivityNanos = System.nanoTime();
     private volatile ScheduledFuture<?> checkTimeoutFuture;
 
-    private final DefaultAttributeServiceSet attributeServiceSet;
-    private final DefaultAttributeHistoryServiceSet attributeHistoryServiceSet;
-    private final DefaultMethodServiceSet methodServiceSet;
-    private final DefaultMonitoredItemServiceSet monitoredItemServiceSet;
-    private final DefaultNodeManagementServiceSet nodeManagementServiceSet;
-    private final DefaultQueryServiceSet queryServiceSet;
-    private final DefaultSubscriptionServiceSet subscriptionServiceSet;
-    private final DefaultViewServiceSet viewServiceSet;
+    private final AttributeServiceSet attributeServiceSet;
+    private final AttributeHistoryServiceSet attributeHistoryServiceSet;
+    private final MethodServiceSet methodServiceSet;
+    private final MonitoredItemServiceSet monitoredItemServiceSet;
+    private final NodeManagementServiceSet nodeManagementServiceSet;
+    private final QueryServiceSet queryServiceSet;
+    private final SubscriptionServiceSet subscriptionServiceSet;
+    private final ViewServiceSet viewServiceSet;
 
     private volatile EndpointDescription endpoint;
     private volatile long secureChannelId;
@@ -344,19 +351,19 @@ public class Session implements SessionServiceSet {
         this.localeIds = localeIds;
     }
 
-    public DefaultAttributeServiceSet getAttributeServiceSet() {
+    public AttributeServiceSet getAttributeServiceSet() {
         return attributeServiceSet;
     }
 
-    public DefaultAttributeHistoryServiceSet getAttributeHistoryServiceSet() {
+    public AttributeHistoryServiceSet getAttributeHistoryServiceSet() {
         return attributeHistoryServiceSet;
     }
 
-    public DefaultMethodServiceSet getMethodServiceSet() {
+    public MethodServiceSet getMethodServiceSet() {
         return methodServiceSet;
     }
 
-    public DefaultMonitoredItemServiceSet getMonitoredItemServiceSet() {
+    public MonitoredItemServiceSet getMonitoredItemServiceSet() {
         return monitoredItemServiceSet;
     }
 
@@ -364,15 +371,15 @@ public class Session implements SessionServiceSet {
         return nodeManagementServiceSet;
     }
 
-    public DefaultQueryServiceSet getQueryServiceSet() {
+    public QueryServiceSet getQueryServiceSet() {
         return queryServiceSet;
     }
 
-    public DefaultSubscriptionServiceSet getSubscriptionServiceSet() {
+    public SubscriptionServiceSet getSubscriptionServiceSet() {
         return subscriptionServiceSet;
     }
 
-    public DefaultViewServiceSet getViewServiceSet() {
+    public ViewServiceSet getViewServiceSet() {
         return viewServiceSet;
     }
 
