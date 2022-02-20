@@ -10,7 +10,24 @@
 
 package org.eclipse.milo.examples.server;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonDeserializationContext;
+import com.google.gson.JsonDeserializer;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonPrimitive;
+import com.google.gson.JsonSerializationContext;
+import com.google.gson.JsonSerializer;
+import com.google.gson.TypeAdapter;
+import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonToken;
+import com.google.gson.stream.JsonWriter;
+import java.io.IOException;
 import java.lang.reflect.Array;
+import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.List;
 import java.util.Random;
 import java.util.UUID;
@@ -30,9 +47,11 @@ import org.eclipse.milo.opcua.sdk.server.api.DataItem;
 import org.eclipse.milo.opcua.sdk.server.api.ManagedNamespaceWithLifecycle;
 import org.eclipse.milo.opcua.sdk.server.api.MonitoredItem;
 import org.eclipse.milo.opcua.sdk.server.dtd.DataTypeDictionaryManager;
+import org.eclipse.milo.opcua.sdk.server.model.nodes.objects.AuditSecurityEventTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.nodes.objects.BaseEventTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.nodes.objects.ServerTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.nodes.variables.AnalogItemTypeNode;
+import org.eclipse.milo.opcua.sdk.server.model.types.objects.AuditSecurityEventType;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaDataTypeNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaFolderNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaMethodNode;
@@ -47,6 +66,10 @@ import org.eclipse.milo.opcua.stack.core.AttributeId;
 import org.eclipse.milo.opcua.stack.core.BuiltinDataType;
 import org.eclipse.milo.opcua.stack.core.Identifiers;
 import org.eclipse.milo.opcua.stack.core.UaException;
+import org.eclipse.milo.opcua.stack.core.serialization.OpcUaBinaryStreamEncoder;
+import org.eclipse.milo.opcua.stack.core.serialization.OpcUaXmlStreamEncoder;
+import org.eclipse.milo.opcua.stack.core.serialization.UaEncoder;
+import org.eclipse.milo.opcua.stack.core.serialization.codecs.OpcUaBinaryDataTypeCodec;
 import org.eclipse.milo.opcua.stack.core.types.builtin.ByteString;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DateTime;
@@ -58,6 +81,8 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.XmlElement;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.StructureType;
+import org.eclipse.milo.opcua.stack.core.types.structured.CallRequest;
+import org.eclipse.milo.opcua.stack.core.types.structured.CallResponse;
 import org.eclipse.milo.opcua.stack.core.types.structured.EnumDefinition;
 import org.eclipse.milo.opcua.stack.core.types.structured.EnumDescription;
 import org.eclipse.milo.opcua.stack.core.types.structured.EnumField;
@@ -94,9 +119,11 @@ public class ExampleNamespace extends ManagedNamespaceWithLifecycle {
         {"String", Identifiers.String, new Variant("string value")},
         {"DateTime", Identifiers.DateTime, new Variant(DateTime.now())},
         {"Guid", Identifiers.Guid, new Variant(UUID.randomUUID())},
-        {"ByteString", Identifiers.ByteString, new Variant(new ByteString(new byte[]{0x01, 0x02, 0x03, 0x04}))},
+        {"ByteString", Identifiers.ByteString,
+            new Variant(new ByteString(new byte[]{0x01, 0x02, 0x03, 0x04}))},
         {"XmlElement", Identifiers.XmlElement, new Variant(new XmlElement("<a>hello</a>"))},
-        {"LocalizedText", Identifiers.LocalizedText, new Variant(LocalizedText.english("localized text"))},
+        {"LocalizedText", Identifiers.LocalizedText,
+            new Variant(LocalizedText.english("localized text"))},
         {"QualifiedName", Identifiers.QualifiedName, new Variant(new QualifiedName(1234, "defg"))},
         {"NodeId", Identifiers.NodeId, new Variant(new NodeId(1234, "abcd"))},
         {"Variant", Identifiers.BaseDataType, new Variant(32)},
@@ -119,7 +146,8 @@ public class ExampleNamespace extends ManagedNamespaceWithLifecycle {
         {"StringArray", Identifiers.String, "string value"},
         {"DateTimeArray", Identifiers.DateTime, DateTime.now()},
         {"GuidArray", Identifiers.Guid, UUID.randomUUID()},
-        {"ByteStringArray", Identifiers.ByteString, new ByteString(new byte[]{0x01, 0x02, 0x03, 0x04})},
+        {"ByteStringArray", Identifiers.ByteString,
+            new ByteString(new byte[]{0x01, 0x02, 0x03, 0x04})},
         {"XmlElementArray", Identifiers.XmlElement, new XmlElement("<a>hello</a>")},
         {"LocalizedTextArray", Identifiers.LocalizedText, LocalizedText.english("localized text")},
         {"QualifiedNameArray", Identifiers.QualifiedName, new QualifiedName(1234, "defg")},
@@ -148,6 +176,7 @@ public class ExampleNamespace extends ManagedNamespaceWithLifecycle {
         getLifecycleManager().addLifecycle(subscriptionModel);
 
         getLifecycleManager().addStartupTask(this::createAndAddNodes);
+        getLifecycleManager().addStartupTask(this::initAudit);
 
         getLifecycleManager().addLifecycle(new Lifecycle() {
             @Override
@@ -166,6 +195,118 @@ public class ExampleNamespace extends ManagedNamespaceWithLifecycle {
                 }
             }
         });
+    }
+
+    private void initAudit() {
+
+        UaNode serverNode = getServer()
+            .getAddressSpaceManager()
+            .getManagedNode(Identifiers.Server)
+            .orElse(null);
+
+        // METHOD AUDIT EVENT
+        getServer().getSessionManager().addMethodServiceSetListener(
+            (session, serviceRequest, serviceResponse) -> {
+                CallRequest request = (CallRequest) serviceRequest.getRequest();
+                CallResponse response = (CallResponse) serviceResponse;
+
+                logger.info("SESSION:"
+                    + session.getSessionId().toString()
+                    + "\tCALL: "
+                    + Arrays.toString(request.getMethodsToCall())
+                );
+                logger.info(serviceRequest.toString());
+                try {
+                    AuditSecurityEventTypeNode auditNode = (AuditSecurityEventTypeNode)
+                        getServer().getEventFactory().createEvent(
+                            newNodeId(UUID.randomUUID()),
+                            Identifiers.AuditSecurityEventType
+                        );
+
+                    auditNode.setBrowseName(new QualifiedName(1, "auditEvent"));
+                    auditNode.setDisplayName(LocalizedText.english("auditEvent"));
+                    auditNode.setEventId(ByteString.of(new byte[]{0, 1, 2, 3}));
+                    auditNode.setEventType(Identifiers.AuditSecurityEventType);
+                    auditNode.setSourceNode(serverNode.getNodeId());
+                    auditNode.setSourceName(serverNode.getDisplayName().getText());
+                    auditNode.setTime(DateTime.now());
+                    auditNode.setReceiveTime(DateTime.NULL_VALUE);
+                    auditNode.setActionTimeStamp(request.getRequestHeader().getTimestamp());
+                    auditNode.setClientUserId(session.getClientUserId());
+                    auditNode.setServerId(session.getServerUri());
+
+                    /*
+                    UaEncoder encoder = new OpcUaXmlStreamEncoder(
+                        getServer().getSerializationContext());
+                    CallRequest.Codec code = new CallRequest.Codec();
+                    code.encode(getServer().getSerializationContext(), encoder, request);
+                    */
+
+                    String auditEntry = request.getRequestHeader().getAuditEntryId();
+                    System.out.println("audit Entry ID:" + auditEntry);
+                    if (auditEntry == null) {
+                        System.out.println(
+                            "client does not impose audit entry!!, generate server side");
+                        auditEntry = UUID.randomUUID().toString();
+                        auditNode.setClientAuditEntryId(auditEntry);
+                    }
+                    String t = "METHOD CALL: REQ{"
+                        + request.getMethodsToCall()[0].getMethodId().toString() + ","
+                        + request.getMethodsToCall()[0].getObjectId().toString() + ","
+                        + Arrays.toString(request.getMethodsToCall()[0].getInputArguments())
+                        + "}, REPL:{"
+                        + response.getResponseHeader().getServiceResult().toString() + ","
+                        + Arrays.toString(response.getResults()[0].getOutputArguments())
+                        + "}";
+                    System.out.println(t);
+                    auditNode.setMessage(LocalizedText.english(t));
+                    auditNode.setSeverity(ushort(3));
+                    GsonBuilder builder = new GsonBuilder().setPrettyPrinting();
+                    builder.registerTypeAdapter(NodeId.class, new NodeIdAdapter());
+                    builder.registerTypeAdapter(ByteString.class, new ByteStringAdapter());
+                    //builder.registerTypeAdapter(byte[].class, new ByteArrayAdapter());
+                    Gson gson = builder.create();
+                    System.out.println(gson.toJson(UUID.randomUUID()));
+                    /*
+                    Gson gson = new GsonBuilder()//.setDateFormat("yyyy-MM-dd HH:mm:ss")
+                        .registerTypeAdapter(ByteString.class,
+                            (JsonSerializer<ByteString>) (src, typeOfSrc, context) ->
+                                new JsonPrimitive(ByteStringHelper.bytesToHex(src.bytes())))
+                        .registerTypeAdapter(ByteString.class,
+                            (JsonDeserializer<ByteString>) (json, typeOfT, context) ->
+                                json == null ? null : json.getAsString() == null ? null
+                                    : new ByteString(
+                                        ByteStringHelper.bytesFromHex(json.getAsString())))
+                        .create();
+                     */
+                    System.out.println("hello");
+                    System.out.println(
+                        request.getRequestHeader().getAuthenticationToken().getIdentifier()
+                            .getClass());
+                    try {
+                        String p = gson.toJson(request);
+                        System.out.println(p);
+                        CallRequest test = gson.fromJson(p, CallRequest.class);
+                        if (test != request) {
+                            System.out.println("failed to match: " + gson.toJson(test));
+                        } else {
+                            System.out.println("successfully matching!!");
+                        }
+                    } catch (NullPointerException exception) {
+                        exception.printStackTrace();
+                        //logger.error(exception.getMessage());
+                    }
+
+                    //noinspection UnstableApiUsage
+                    getServer().getEventBus().post(auditNode);
+
+                    auditNode.delete();
+
+                } catch (UaException | NullPointerException exception) {
+                    logger.error(exception.getMessage());
+                }
+
+            });
     }
 
     private void createAndAddNodes() {
@@ -578,7 +719,8 @@ public class ExampleNamespace extends ManagedNamespaceWithLifecycle {
                 Identifiers.AnalogItemType,
                 new NodeFactory.InstantiationCallback() {
                     @Override
-                    public boolean includeOptionalNode(NodeId typeDefinitionId, QualifiedName browseName) {
+                    public boolean includeOptionalNode(NodeId typeDefinitionId,
+                        QualifiedName browseName) {
                         return true;
                     }
                 }
@@ -604,7 +746,8 @@ public class ExampleNamespace extends ManagedNamespaceWithLifecycle {
             .setBrowseName(newQualifiedName("sqrt(x)"))
             .setDisplayName(new LocalizedText(null, "sqrt(x)"))
             .setDescription(
-                LocalizedText.english("Returns the correctly rounded positive square root of a double value."))
+                LocalizedText.english(
+                    "Returns the correctly rounded positive square root of a double value."))
             .build();
 
         SqrtMethod sqrtMethod = new SqrtMethod(methodNode);
@@ -628,7 +771,8 @@ public class ExampleNamespace extends ManagedNamespaceWithLifecycle {
             .setBrowseName(newQualifiedName("generateEvent(eventTypeId)"))
             .setDisplayName(new LocalizedText(null, "generateEvent(eventTypeId)"))
             .setDescription(
-                LocalizedText.english("Generate an Event with the TypeDefinition indicated by eventTypeId."))
+                LocalizedText.english(
+                    "Generate an Event with the TypeDefinition indicated by eventTypeId."))
             .build();
 
         GenerateEventMethod generateEventMethod = new GenerateEventMethod(methodNode);
@@ -796,9 +940,11 @@ public class ExampleNamespace extends ManagedNamespaceWithLifecycle {
     private void registerCustomStructType() throws Exception {
         // Get the NodeId for the DataType and encoding Nodes.
 
-        NodeId dataTypeId = CustomStructType.TYPE_ID.toNodeIdOrThrow(getServer().getNamespaceTable());
+        NodeId dataTypeId = CustomStructType.TYPE_ID.toNodeIdOrThrow(
+            getServer().getNamespaceTable());
 
-        NodeId binaryEncodingId = CustomStructType.BINARY_ENCODING_ID.toNodeIdOrThrow(getServer().getNamespaceTable());
+        NodeId binaryEncodingId = CustomStructType.BINARY_ENCODING_ID.toNodeIdOrThrow(
+            getServer().getNamespaceTable());
 
         // At a minimum, custom types must have their codec registered.
         // If clients don't need to dynamically discover types and will
@@ -868,9 +1014,11 @@ public class ExampleNamespace extends ManagedNamespaceWithLifecycle {
     }
 
     private void registerCustomUnionType() throws Exception {
-        NodeId dataTypeId = CustomUnionType.TYPE_ID.toNodeIdOrThrow(getServer().getNamespaceTable());
+        NodeId dataTypeId = CustomUnionType.TYPE_ID.toNodeIdOrThrow(
+            getServer().getNamespaceTable());
 
-        NodeId binaryEncodingId = CustomUnionType.BINARY_ENCODING_ID.toNodeIdOrThrow(getServer().getNamespaceTable());
+        NodeId binaryEncodingId = CustomUnionType.BINARY_ENCODING_ID.toNodeIdOrThrow(
+            getServer().getNamespaceTable());
 
         dictionaryManager.registerUnionCodec(
             new CustomUnionType.Codec().asBinaryCodec(),
@@ -942,9 +1090,11 @@ public class ExampleNamespace extends ManagedNamespaceWithLifecycle {
     }
 
     private void addCustomStructTypeVariable(UaFolderNode rootFolder) throws Exception {
-        NodeId dataTypeId = CustomStructType.TYPE_ID.toNodeIdOrThrow(getServer().getNamespaceTable());
+        NodeId dataTypeId = CustomStructType.TYPE_ID.toNodeIdOrThrow(
+            getServer().getNamespaceTable());
 
-        NodeId binaryEncodingId = CustomStructType.BINARY_ENCODING_ID.toNodeIdOrThrow(getServer().getNamespaceTable());
+        NodeId binaryEncodingId = CustomStructType.BINARY_ENCODING_ID.toNodeIdOrThrow(
+            getServer().getNamespaceTable());
 
         UaVariableNode customStructTypeVariable = UaVariableNode.builder(getNodeContext())
             .setNodeId(newNodeId("HelloWorld/CustomStructTypeVariable"))
@@ -981,9 +1131,11 @@ public class ExampleNamespace extends ManagedNamespaceWithLifecycle {
     }
 
     private void addCustomUnionTypeVariable(UaFolderNode rootFolder) throws Exception {
-        NodeId dataTypeId = CustomUnionType.TYPE_ID.toNodeIdOrThrow(getServer().getNamespaceTable());
+        NodeId dataTypeId = CustomUnionType.TYPE_ID.toNodeIdOrThrow(
+            getServer().getNamespaceTable());
 
-        NodeId binaryEncodingId = CustomUnionType.BINARY_ENCODING_ID.toNodeIdOrThrow(getServer().getNamespaceTable());
+        NodeId binaryEncodingId = CustomUnionType.BINARY_ENCODING_ID.toNodeIdOrThrow(
+            getServer().getNamespaceTable());
 
         UaVariableNode customUnionTypeVariable = UaVariableNode.builder(getNodeContext())
             .setNodeId(newNodeId("HelloWorld/CustomUnionTypeVariable"))
